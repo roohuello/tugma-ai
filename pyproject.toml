@@ -1,0 +1,38 @@
+[project]
+name = "tugma-ai"
+version = "0.1.0"
+description = "SSHS Elective Matcher — match Filipino students to electives based on career aspirations"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic-settings>=2.7",
+    "langchain-openai>=0.3",
+    "qdrant-client>=1.13",
+    "redis>=6.4",
+    "langgraph-checkpoint-redis>=0.3",
+    "httpx>=0.28",
+    "llama-index-core>=0.12",
+    "llama-index-readers-file>=0.4",
+    "guardrails-ai==0.10.0",
+    "fastapi[standard]>=0.128",
+    "fastembed>=0.5",
+    "deepagents>=0.1",
+    "chainlit>=2.5",
+    "langfuse>=4.6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.25",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
