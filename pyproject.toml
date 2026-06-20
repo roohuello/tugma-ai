@@ -12,6 +12,8 @@ dependencies = [
     "httpx>=0.28",
     "llama-index-core>=0.12",
     "llama-index-readers-file>=0.4",
+    "llama-index-embeddings-jinaai>=0.6",
+    "llama-index-vector-stores-qdrant>=0.10",
     "guardrails-ai==0.10.0",
     "fastapi[standard]>=0.128",
     "fastembed>=0.5",

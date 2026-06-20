@@ -1,18 +1,17 @@
-"""Jina embeddings — HTTP, no SDK. Uses OpenAI-compatible /v1/embeddings endpoint."""
+"""Jina embeddings — v5-text-small via llama-index adapter."""
 
-from langchain_openai import OpenAIEmbeddings
+from llama_index.embeddings.jinaai import JinaEmbedding
 
 from src.config import settings
 
-JINA_BASE_URL = "https://api.jina.ai/v1"
 EMBEDDING_MODEL = "jina-embeddings-v5-text-small"
 EMBEDDING_DIM = 1024
 
 
-def get_embeddings() -> OpenAIEmbeddings:
-    return OpenAIEmbeddings(
+def get_embeddings() -> JinaEmbedding:
+    return JinaEmbedding(
         model=EMBEDDING_MODEL,
-        base_url=JINA_BASE_URL,
         api_key=settings.jina_api_key,
-        dimensions=EMBEDDING_DIM,
+        task="retrieval.passage",
+        embed_batch_size=16,
     )

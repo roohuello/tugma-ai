@@ -6,6 +6,7 @@ Usage: uv run python -m ingestion.ingest [--force]
 
 import argparse
 import asyncio
+import hashlib
 import re
 from pathlib import Path
 
@@ -25,12 +26,15 @@ DOCUMENTS_DIR = Path("documents")
 
 
 def subject_area_from_filename(name: str) -> str:
-    """Extract subject area from DepEd PDF filename."""
     name = Path(name).stem
-    # Remove trailing markers like -1, -Updated-as-of-...
     name = re.sub(r"-\d+$", "", name)
     name = re.sub(r"-Updated.*$", "", name)
     return name.replace("-", " ").strip()
+
+
+def make_doc_id(source_doc: str, page: str, chunk_idx: int) -> int:
+    digest = hashlib.md5(f"{source_doc}:{page}:{chunk_idx}".encode()).hexdigest()
+    return int(digest[:16], 16) % (2**63)
 
 
 async def create_collection(client: AsyncQdrantClient, force: bool = False) -> None:
@@ -58,8 +62,8 @@ async def ingest(force: bool = False) -> int:
 
     print(f"Found {len(pdfs)} PDFs")
 
-    client = AsyncQdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
-    embeddings = get_embeddings()
+    client = AsyncQdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key, timeout=120)
+    embed_model = get_embeddings()
     sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
     splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
 
@@ -67,7 +71,6 @@ async def ingest(force: bool = False) -> int:
         await create_collection(client, force)
         print(f"Collection '{COLLECTION_NAME}' ready")
 
-        next_id = 0
         for pdf_path in tqdm(pdfs, desc="Ingesting PDFs"):
             subject = subject_area_from_filename(pdf_path.name)
             reader = SimpleDirectoryReader(input_files=[str(pdf_path)])
@@ -75,26 +78,30 @@ async def ingest(force: bool = False) -> int:
 
             for doc in docs:
                 nodes = splitter.get_nodes_from_documents([doc])
-                texts = [n.get_content() for n in nodes]
-
+                raw_texts = [n.get_content() for n in nodes]
+                texts = [t.strip() for t in raw_texts if t and str(t).strip()]
                 if not texts:
                     continue
 
-                dense_vectors = await embeddings.aembed_documents(texts)
+                dense_vectors = embed_model.get_text_embedding_batch(texts)
                 sparse_generator = sparse_model.embed(texts)
                 sparse_vectors = [
                     (list(s.indices), list(s.values)) for s in sparse_generator
                 ]
 
+                page = doc.metadata.get("page_label", "p0")
+
                 points = []
                 for i, (text, dense, (indices, values)) in enumerate(
                     zip(texts, dense_vectors, sparse_vectors)
                 ):
-                    page = doc.metadata.get("page_label", f"p{i}")
                     points.append(
                         models.PointStruct(
-                            id=next_id,
-                            vector={VECTOR_NAME: dense, "sparse": models.SparseVector(indices=indices, values=values)},
+                            id=make_doc_id(pdf_path.name, str(page), i),
+                            vector={
+                                VECTOR_NAME: dense,
+                                "sparse": models.SparseVector(indices=indices, values=values),
+                            },
                             payload={
                                 "text": text,
                                 "source_document": pdf_path.name,
@@ -105,7 +112,6 @@ async def ingest(force: bool = False) -> int:
                             },
                         )
                     )
-                    next_id += 1
 
                 if points:
                     await client.upsert(
