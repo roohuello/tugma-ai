@@ -48,10 +48,26 @@ def profile_completeness(profile: StudentProfile) -> float:
     return filled / total
 
 
-def judge_relevance(recommendations_json: str, retrieved_chunks: str) -> float | None:
+async def judge_relevance(recommendations_json: str, retrieved_chunks: str) -> float | None:
     """LLM-as-judge: how well do recommendations align with retrieved chunks?
 
     Returns 0.0–1.0 score or None if LangFuse is not configured.
-    ponytail: deferred to Day 3. Stub returns None.
     """
-    return None
+    if not settings.langfuse_public_key:
+        return None
+    try:
+        from src.core.llm import get_chat_model
+        llm = get_chat_model()
+        prompt = (
+            "You are a curriculum alignment judge. Rate how well these SSHS elective "
+            "recommendations are supported by the retrieved DepEd curriculum chunks. "
+            "Score 0.0-1.0 where 1.0 = perfectly grounded in the documents, "
+            "0.0 = hallucinated or unsupported.\n\n"
+            "RETRIEVED CURRICULUM CHUNKS:\n{chunks}\n\n"
+            "RECOMMENDATIONS:\n{recs}\n\n"
+            "Return ONLY a number between 0.0 and 1.0. No explanation."
+        ).format(chunks=retrieved_chunks[:8000], recs=recommendations_json[:8000])
+        resp = await llm.ainvoke(prompt)
+        return max(0.0, min(1.0, float(resp.content.strip())))
+    except Exception:
+        return None

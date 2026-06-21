@@ -1,4 +1,7 @@
+import json
+
 from langchain_core.tools import tool
+from langgraph.config import get_stream_writer
 from fastembed import SparseTextEmbedding
 
 from src.core.embeddings import get_embeddings
@@ -110,3 +113,40 @@ def contradiction_check(reason: str, suggestion: str) -> str:
         suggestion: What the student might consider instead
     """
     return "Contradiction flagged."
+
+
+@tool
+def emit_stage(name: str) -> str:
+    """Signal a stage transition in the pipeline UI.
+
+    Call BEFORE delegating to a subagent.
+
+    Args:
+        name: Stage display name, e.g. "Translating..."
+              or "Searching curriculum..."
+    """
+    writer = get_stream_writer()
+    writer({"type": "stage", "name": name})
+    return f"Stage set to: {name}"
+
+
+@tool
+def emit_recommendations(recommendations_json: str, retrieved_chunks: str) -> str:
+    """Emit final elective recommendations for rendering and LangFuse scoring.
+
+    Call AFTER writing /recommendations.json. Pass the full content of both
+    /recommendations.json and /retrieved_chunks.md.
+
+    Args:
+        recommendations_json: Full JSON content of /recommendations.json
+        retrieved_chunks: Full content of /retrieved_chunks.md
+    """
+    data = json.loads(recommendations_json)
+    writer = get_stream_writer()
+    writer({"type": "stage", "name": "Your recommendations"})
+    writer({
+        "type": "recommendations",
+        "data": data,
+        "retrieved_chunks": retrieved_chunks,
+    })
+    return "Recommendations emitted."

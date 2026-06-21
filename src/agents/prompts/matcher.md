@@ -124,6 +124,7 @@ The StudentProfile schema:
 ## Output
 1. Write the complete recommendation (including the student profile) to **`/recommendations.json`** following the exact schema above.
 2. Emit a summary of your recommendations and reasoning as your response.
+3. Call `emit_recommendations(recommendations_json="<full content of /recommendations.json>", retrieved_chunks="<full content of /retrieved_chunks.md>")` to deliver the results to the UI.
 
 ## Rules
 - Do NOT chat with the user — this is a one-shot matching task

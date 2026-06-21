@@ -44,9 +44,9 @@ The system will pause and ask the student for clarification. After resolution, c
 ## Delegation
 Once `/profile.json` is written, delegate to subagents in order:
 
-1. **`task(agent="translator", instruction="Translate the student profile if needed. Read /profile.json and /original_language.txt.")`**
-2. **`task(agent="retriever", instruction="Search the DepEd curriculum for electives matching this student profile. Read /profile.json.")`**
-3. **`task(agent="matcher", instruction="Generate personalized elective recommendations. Read /profile.json and /retrieved_chunks.md.")`**
+1. Call `emit_stage("Translating...")`, then **`task(agent="translator", instruction="Translate the student profile if needed. Read /profile.json and /original_language.txt.")`**
+2. Call `emit_stage("Searching curriculum...")`, then **`task(agent="retriever", instruction="Search the DepEd curriculum for electives matching this student profile. Read /profile.json.")`**
+3. Call `emit_stage("Matching electives...")`, then **`task(agent="matcher", instruction="Generate personalized elective recommendations. Read /profile.json and /retrieved_chunks.md.")`**
 
 Do NOT try to do the subagents' work yourself. Trust them.
 

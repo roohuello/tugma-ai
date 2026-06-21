@@ -1,3 +1,4 @@
+import json
 import logging
 
 import chainlit as cl
@@ -9,7 +10,7 @@ from langgraph.types import Command
 from src.agents.main_agent import build_agent
 from src.core.guardrails import check_input
 from src.core.redis import get_checkpointer, get_store
-from src.observability.langfuse import get_langfuse_handler, profile_completeness
+from src.observability.langfuse import get_langfuse_handler, profile_completeness, judge_relevance
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +28,7 @@ async def _setup_state():
         _saver = get_checkpointer()
         await _saver.asetup()
         _store = get_store()
-        await _store.asetup()
+        await _store.setup()
     except Exception as e:
         logger.warning("Redis unavailable (%s) — using in-memory state. Session data won't persist.", e)
         _saver = MemorySaver()
@@ -74,7 +75,10 @@ async def on_message(msg: cl.Message):
     interrupted = cl.user_session.get("interrupted")
     if interrupted:
         cl.user_session.set("interrupted", False)
-        input_msg = Command(resume={"decisions": [{"type": "approve"}]})
+        input_msg = Command(
+            resume={"decisions": [{"type": "approve"}]},
+            update={"messages": [HumanMessage(content=msg.content)]},
+        )
     else:
         input_msg = {"messages": [HumanMessage(content=msg.content)]}
 
@@ -116,6 +120,18 @@ async def on_message(msg: cl.Message):
                                     value=profile_completeness(profile),
                                     data_type="NUMERIC",
                                 )
+                            except Exception:
+                                pass
+                            try:
+                                recs_json = json.dumps(chunk["data"])
+                                chunks = chunk.get("retrieved_chunks", "")
+                                score = await judge_relevance(recs_json, chunks)
+                                if score is not None:
+                                    span.score(
+                                        name="recommendation_relevance",
+                                        value=score,
+                                        data_type="NUMERIC",
+                                    )
                             except Exception:
                                 pass
                 elif chunk_type == "token":

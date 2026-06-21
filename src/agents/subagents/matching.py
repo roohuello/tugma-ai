@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from src.agents.tools import emit_recommendations
 from src.core.llm import get_chat_model, MATCHING_MODEL
 
 _PROMPT_DIR = Path(__file__).parent.parent / "prompts"
@@ -14,5 +15,5 @@ matching_subagent = {
     "description": "Match student profile to elective recommendations with 8-rule reasoning and structured JSON output.",
     "system_prompt": _load_prompt("matcher"),
     "model": get_chat_model(model=MATCHING_MODEL),
-    "tools": [],
+    "tools": [emit_recommendations],
 }
