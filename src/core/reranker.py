@@ -5,7 +5,7 @@ import httpx
 from src.config import settings
 
 JINA_RERANK_URL = "https://api.jina.ai/v1/rerank"
-RERANKER_MODEL = "jina-reranker-v2-base-multilingual"
+RERANKER_MODEL = "jina-reranker-v3"
 
 
 async def rerank(

@@ -26,14 +26,13 @@ a conversational AI experience.
 
 | Layer | Technology |
 |-------|-----------|
-| API | FastAPI (async, SSE streaming) |
+| API | FastAPI (GET /health only) |
 | Agent Framework | DeepAgents (LangGraph + LangChain substrate) |
 | Frontend | Chainlit |
 | Vector Search | Qdrant (hybrid: dense + sparse) |
 | Session State | Redis (LangGraph AsyncRedisSaver) |
-| Rate Limiting | Redis token-bucket |
-| Embeddings | Jina AI (jina-embeddings-v3) |
-| Reranker | Jina AI (jina-reranker-v2) |
+| Embeddings | Jina AI (jina-embeddings-v5-text-small) |
+| Reranker | Jina AI (jina-reranker-v3) |
 | Document Ingestion | LlamaIndex |
 | Observability | LangFuse |
 | Input Guardrails | Guardrails AI |
@@ -47,7 +46,7 @@ a conversational AI experience.
 
 - Python 3.11+
 - Qdrant Cloud account (free tier sufficient)
-- Redis Cloud account (free tier sufficient)
+- Redis (local Docker, docker-compose provided)
 - Jina AI API key (free tier: 10M tokens)
 - OpenAI-compatible LLM endpoint
 - LangFuse account (optional, for observability)
@@ -59,20 +58,18 @@ git clone <repo-url>
 cd tugma-ai
 
 # Install dependencies
-pip install -e ".[dev]"
+uv sync
 
 # Configure environment
 cp .env.example .env
 # Fill in .env with your API keys
 
 # Ingest DepEd documents (run once)
-python -m ingestion.ingest
+uv run python -m ingestion.ingest
 
-# Start backend
-uvicorn src.main:app --reload
-
-# Start frontend (separate terminal)
-chainlit run frontend/app.py
+# Start backend + frontend
+docker compose up -d redis
+uv run chainlit run frontend/app.py
 ```
 
 ### Architecture Decision Records

@@ -10,9 +10,7 @@ __pycache__/
 .qdrant/
 uv.lock
 
-docs/
 documents/
-tests/
 
 AGENTS*
 CONTEXT*
