@@ -4,7 +4,6 @@ from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 
 from src.agents.tools import contradiction_check, emit_stage
-from src.agents.subagents.translation import translation_subagent
 from src.agents.subagents.retrieval import retrieval_subagent
 from src.agents.subagents.matching import matching_subagent
 from src.core.llm import get_chat_model
@@ -26,7 +25,7 @@ def build_agent(checkpointer, store=None):
     return create_deep_agent(
         model=get_chat_model(),
         system_prompt=_load_prompt("intake"),
-        subagents=[translation_subagent, retrieval_subagent, matching_subagent],
+        subagents=[retrieval_subagent, matching_subagent],
         tools=[contradiction_check, emit_stage],
         backend=StateBackend(),
         checkpointer=checkpointer,

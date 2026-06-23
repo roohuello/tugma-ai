@@ -3,13 +3,6 @@ from langgraph.checkpoint.memory import MemorySaver
 from src.agents.main_agent import build_agent
 from src.agents.subagents.matching import matching_subagent
 from src.agents.subagents.retrieval import retrieval_subagent
-from src.agents.subagents.translation import translation_subagent
-
-
-def test_translation_subagent_structure():
-    assert translation_subagent["name"] == "translator"
-    assert "system_prompt" in translation_subagent
-    assert translation_subagent["tools"] == []
 
 
 def test_retrieval_subagent_structure():

@@ -1,7 +1,7 @@
 # ADR 001: Project Foundation — Tugma-AI
 
 **Date:** 2026-06-19
-**Status:** Accepted (Revised after grill-with-docs + grilling session — 52 decisions)
+**Status:** Accepted (Revised after grill-with-docs + grilling session — 52 decisions. Amended 2026-06-24: simplified to 2 subagents, single model, removed translator)
 
 ---
 
@@ -61,13 +61,12 @@ DeepAgents provides:
 - Pluggable checkpointing and store (`AsyncRedisSaver`, `RedisStore`)
 - Returns `CompiledStateGraph` — LangGraph v2 streaming works underneath
 
-### Agent Architecture: Main Orchestrator + 3 Subagents
+### Agent Architecture: Main Orchestrator + 2 Subagents
 
 ```
 Main Agent (Intake/Orchestrator)
 │  tools=[contradiction_check, emit_stage]   ← HITL trigger + stage signals
 │
-├── Subagent: Translation        one-shot Taglish → English
 ├── Subagent: Retrieval          Qdrant hybrid search + Jina rerank
 └── Subagent: Matching           career → elective reasoning + structured output
 
@@ -97,7 +96,6 @@ Structured output for the matching subagent achieved via JSON schema in the syst
 
 **Inter-agent communication:** Via FilesystemMiddleware's virtual filesystem:
 - `/profile.json` — `StudentProfile`, written by main agent
-- `/original_language.txt` — "tagalog", "taglish", or "english"
 - `/retrieved_chunks.md` — Qdrant results + Jina reranked snippets, written by retrieval subagent
 - `/recommendations.json` — `ElectiveRecommendation`, written by matching subagent
 
@@ -142,7 +140,7 @@ async def on_chat_start():
     agent = create_deep_agent(
         model=chat_model,           # ChatModel object from core/llm.py
         system_prompt=INTAKE_SYSTEM_PROMPT,
-        subagents=[translation_subagent, retrieval_subagent, matching_subagent],
+        subagents=[retrieval_subagent, matching_subagent],
         tools=[contradiction_check, emit_stage],
         backend=StateBackend(),
         checkpointer=_saver,
@@ -233,12 +231,11 @@ writer({"type": "stage", "name": "Searching curriculum..."})
 ```
 
 Chainlit handler catches these events and updates the parent step's display name.
-The 5 pipeline stages:
+The 4 pipeline stages:
 1. "Getting to know you..." (intake)
-2. "Translating..." (translation)
-3. "Searching curriculum..." (retrieval)
-4. "Matching electives..." (matching)
-5. "Your recommendations" (final)
+2. "Searching curriculum..." (retrieval)
+3. "Matching electives..." (matching)
+4. "Your recommendations" (final)
 
 Recommendations are delivered via the `emit_recommendations` tool (in `src/agents/tools.py`).
 The matcher subagent calls it after writing `/recommendations.json`. It emits two custom events:
@@ -318,11 +315,9 @@ tugma-ai/
 │   │   ├── main_agent.py           # create_deep_agent() → orchestrator
 │   │   ├── prompts/                # Separate .md prompt files
 │   │   │   ├── intake.md
-│   │   │   ├── translator.md
 │   │   │   ├── retriever.md
 │   │   │   └── matcher.md
 │   │   ├── subagents/
-│   │   │   ├── translation.py      # Subagent dict: Taglish → English
 │   │   │   ├── retrieval.py        # Subagent dict: Qdrant + rerank
 │   │   │   └── matching.py         # Subagent dict: career → electives
 │   │   └── tools.py                # Domain tools: qdrant_hybrid_search_tool,
@@ -389,7 +384,6 @@ agent = create_deep_agent(
     model=get_chat_model(),         # ChatModel object — supports any OpenAI-compatible endpoint
     system_prompt=INTAKE_SYSTEM_PROMPT,
     subagents=[
-        translation_subagent,
         retrieval_subagent,
         matching_subagent,
     ],
@@ -406,7 +400,7 @@ Key decisions:
 - `interrupt_on` is a top-level parameter (auto-adds `HumanInTheLoopMiddleware`)
 - `context_schema` dropped — domain data flows through FilesystemMiddleware files
 - Main agent has two tools: `contradiction_check` (HITL trigger) and `emit_stage` (pipeline UI signals).
-  All domain work delegated to subagents via `task()`.
+  All domain work delegated to 2 subagents via `task()`.
 - Model is a `ChatModel` object, not a string — enables any OpenAI-compatible endpoint
 - `AsyncRedisSaver` + `RedisStore` connected to local Redis in container (`redis://localhost:6379/0`)
 
@@ -418,25 +412,19 @@ User Message (Tagalog/Taglish/English)
         ▼
 ┌──────────────────────┐
 │ MAIN AGENT (Intake)  │  Conversational profiling (max 6 exchanges).
-│                      │  Writes /profile.json + /original_language.txt.
+│                      │  Writes /profile.json (always in English).
 │                      │  Calls contradiction_check → HITL interrupt.
 │                      │  Calls emit_stage before each subagent delegation.
 │                      │  Agent decides when profiling is complete.
 └────────┬─────────────┘
-         │ profile complete → emit_stage("Translating...") → task()
-         ▼
-┌──────────────────────┐
-│ Translation Subagent │  Taglish → English. Reads /profile.json,
-│                      │  /original_language.txt. One-shot.
-└────────┬─────────────┘
-         │ emit_stage("Searching curriculum...") → task()
+         │ profile complete → emit_stage("Searching curriculum...") → task()
          ▼
 ┌──────────────────────┐
 │ Retrieval Subagent   │  Reads /profile.json → Qdrant hybrid
 │                      │  (dense + BM25 sparse). Jina rerank.
 │                      │  Writes /retrieved_chunks.md.
 └────────┬─────────────┘
-         │
+         │ emit_stage("Matching electives...") → task()
          ▼
 ┌──────────────────────┐
 │ Matching Subagent    │  Reads /profile.json + /retrieved_chunks.md.
@@ -449,18 +437,6 @@ User Message (Tagalog/Taglish/English)
    Chainlit catches custom event → renders ElectiveCard components
 ```
 
-### Subagent: Translation
-
-```python
-translation_subagent = {
-    "name": "translator",
-    "description": "Translate Tagalog/Taglish text to English using profile + language context.",
-    "system_prompt": TRANSLATOR_PROMPT,  # Loaded from src/agents/prompts/translator.md
-    "model": get_chat_model(),           # User's chosen model (default gpt-4o-mini)
-    "tools": [],
-}
-```
-
 ### Subagent: Retrieval
 
 ```python
@@ -469,7 +445,7 @@ retrieval_subagent = {
     "description": "Search DepEd curriculum documents for relevant elective subjects.",
     "system_prompt": RETRIEVER_PROMPT,   # Loaded from src/agents/prompts/retriever.md
     "tools": [qdrant_hybrid_search_tool],
-    "model": get_chat_model(),           # User's chosen model (default gpt-4o-mini)
+    "model": get_chat_model(),
 }
 ```
 
@@ -481,8 +457,8 @@ matching_subagent = {
     "description": "Map student profile to elective recommendations with personalized reasoning.",
     "system_prompt": MATCHER_PROMPT,     # Loaded from src/agents/prompts/matcher.md
                                          # Includes full JSON schema for ElectiveRecommendation
-    "model": get_chat_model(model="gpt-4o"),  # gpt-4o for stronger structured reasoning
-    "tools": [emit_recommendations],  # Emits custom event for UI rendering + LangFuse scoring
+    "tools": [emit_recommendations],
+    "model": get_chat_model(),
 }
 ```
 
@@ -514,8 +490,7 @@ All domain data flows through FilesystemMiddleware's virtual files (prompt-drive
 
 | File | Written by | Read by |
 |---|---|---|
-| `/profile.json` | Main agent | Translator, Retriever, Matcher |
-| `/original_language.txt` | Main agent | Translator |
+| `/profile.json` | Main agent | Retriever, Matcher |
 | `/retrieved_chunks.md` | Retriever | Matcher |
 | `/recommendations.json` | Matcher | Chainlit (via custom event + Pydantic validation) |
 
@@ -593,8 +568,7 @@ class ElectiveRecommendation(BaseModel):
 
 | Component | Provider | Model | Note |
 |-----------|----------|-------|------|
-| Main agent + translator, retriever | OpenAI-compatible | User's chosen model (default gpt-4o-mini) | Passed as `ChatModel` object from `core/llm.py` |
-| Matching subagent | OpenAI-compatible | gpt-4o (stronger reasoning) | 8-rule system prompt with JSON schema |
+| All agents (main + subagents) | OpenAI-compatible | `LLM_MODEL` from `.env` | Passed as `ChatModel` object from `core/llm.py` |
 | Embeddings | Jina AI | `jina-embeddings-v5-text-small` | 1024-dim, multilingual, 32K context. HTTP API, no SDK. |
 | Reranker | Jina AI | `jina-reranker-v3` | 0.6B params, multilingual. HTTP API, no SDK. |
 
@@ -790,7 +764,7 @@ pipeline = IngestionPipeline(
 
 ### Day 2: Agent Pipeline & Chainlit UI
 - `src/models/` — `profile.py`, `recommendations.py`.
-- `src/agents/prompts/` — 4 `.md` system prompt files (intake, translator, retriever, matcher).
+- `src/agents/prompts/` — 3 `.md` system prompt files (intake, retriever, matcher).
 - `src/agents/tools.py` — `qdrant_hybrid_search_tool` + `contradiction_check`.
 - `src/agents/subagents/` — 3 subagent dicts (ChatModel objects, no response_format).
 - `src/agents/main_agent.py` — `create_deep_agent()` with `StateBackend`, `tools=[contradiction_check]`, `interrupt_on`.
