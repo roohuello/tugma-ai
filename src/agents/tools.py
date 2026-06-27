@@ -32,8 +32,6 @@ async def qdrant_hybrid_search_tool(
     query: str,
     limit: int = 10,
     subject_area: str = "",
-    track: str = "",
-    cluster: str = "",
 ) -> str:
     """Search DepEd SSHS curriculum documents using hybrid (dense + sparse) search with optional reranking.
 
@@ -44,8 +42,6 @@ async def qdrant_hybrid_search_tool(
         query: Natural language search query (e.g., "nursing career electives biology")
         limit: Maximum number of results to return (default 10)
         subject_area: Optional filter by subject area (e.g., "Science")
-        track: Optional filter by track ("Academic" or "TechPro")
-        cluster: Optional filter by elective cluster name
     """
     embed = _get_embed_model()
     sparse = _get_sparse_model()
@@ -63,10 +59,6 @@ async def qdrant_hybrid_search_tool(
     must_conditions = []
     if subject_area:
         must_conditions.append(models.FieldCondition(key="subject_area", match=models.MatchValue(value=subject_area)))
-    if track:
-        must_conditions.append(models.FieldCondition(key="track", match=models.MatchValue(value=track)))
-    if cluster:
-        must_conditions.append(models.FieldCondition(key="cluster", match=models.MatchValue(value=cluster)))
     qdrant_filter = models.Filter(must=must_conditions) if must_conditions else None
 
     points = await hybrid_search(

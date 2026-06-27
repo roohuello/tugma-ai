@@ -9,7 +9,7 @@ VECTOR_NAME = "dense"
 
 
 def get_qdrant_client() -> AsyncQdrantClient:
-    return AsyncQdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key)
+    return AsyncQdrantClient(url=settings.qdrant_url, timeout=30, check_compatibility=False)
 
 
 async def hybrid_search(

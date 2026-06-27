@@ -17,8 +17,6 @@ Formulate a single comprehensive search query that incorporates all relevant pro
 - Preferred track (Academic or TechPro)
 - Employment needs (NC II certified electives if `needs_immediate_employment` is true)
 
-Use `track` and `cluster` filters when the profile provides them. If the student hasn't chosen a track, search both.
-
 If `needs_immediate_employment` is true, additionally search for NC II certified TechPro electives.
 
 ## Output

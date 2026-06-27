@@ -1,7 +1,7 @@
 # ADR 001: Project Foundation — Tugma-AI
 
 **Date:** 2026-06-19
-**Status:** Accepted (Revised after grill-with-docs + grilling session — 52 decisions. Amended 2026-06-24: simplified to 2 subagents, single model, removed translator)
+**Status:** Accepted (Revised after grill-with-docs + grilling session — 52 decisions. Amended 2026-06-24: simplified to 2 subagents, single model, removed translator. Amended 2026-06-27: removed Fly.io; Docker-only generic deploy.)
 
 ---
 
@@ -40,14 +40,14 @@ frontend/ (Chainlit, runs graph) ──→ agents/ (DeepAgents domain)
   agents call `core/qdrant.hybrid_search()`, never `qdrant_client` directly.
   Swap = edit one `core/` file.
 
-### Deployment: Docker + Fly.io
+### Deployment: Docker (generic container)
 
 - **Container:** Single `Dockerfile` based on `python:3.13-slim-bookworm`.
   Three processes managed by `supervisord`: redis-server (port 6379), uvicorn (port 8001), chainlit (port 8000).
-- **Platform:** Fly.io, Singapore region (`sin`). Secrets via `fly secrets set`.
-- **Redis persistence:** Redis runs per-deploy with no Fly volume. Session data is ephemeral —
-  sessions don't survive redeploys. Acceptable for portfolio demo scope. No volume cost.
-- **`fly.toml`** committed to repo for reproducible deploys. Health check via TCP on port 8000.
+- **Secrets:** Inject via container env (`--env-file .env` or host orchestrator secrets).
+- **Health:** Chainlit on port 8000 (HTTP); FastAPI health on port 8001 (`GET /health`).
+- **Redis persistence:** Bundled in-container Redis is ephemeral (`--save "" --appendonly no` per `supervisord.conf`).
+  Session data does not survive container restart. Acceptable for portfolio demo scope.
 
 ### Agent Framework: DeepAgents (with LangGraph substrate)
 
@@ -302,7 +302,6 @@ tugma-ai/
 ├── pyproject.toml
 ├── Dockerfile                       # Single-stage, supervisord entrypoint
 ├── supervisord.conf                 # redis + uvicorn + chainlit
-├── fly.toml                         # Fly.io deployment config
 ├── .env.example
 ├── README.md
 ├── docs/adr/
@@ -365,7 +364,7 @@ Changes from original:
 - `src/core/guardrails.py` added (moved from `api/middleware/`)
 - `src/models/chat.py` removed (SSE events not needed; Chainlit owns UI)
 - `tests/test_api/` → removed (graph tested via agent directly)
-- `Dockerfile`, `supervisord.conf`, `fly.toml` added to root
+- `Dockerfile`, `supervisord.conf` added to root
 - `frontend/public/elements/ElectiveCard.jsx` added for recommendation cards
 
 ---
@@ -512,7 +511,7 @@ await _store.asetup()
 - Redis runs locally in Docker container (`redis://localhost:6379/0`). No external Redis Cloud dependency.
 - Session TTL: `{"default_ttl": 30, "refresh_on_read": True}` — active sessions auto-refresh.
 - `supervisord.conf` starts redis (priority 1), then uvicorn (2), then chainlit (3).
-- No Fly volume — Redis data is per-deploy ephemeral (portfolio demo scope).
+- No Redis persistence in container — session data is ephemeral (portfolio demo scope).
 
 ---
 
@@ -614,8 +613,8 @@ class Settings(BaseSettings):
 1. **Session state:** `AsyncRedisSaver` — DeepAgents/LangGraph checkpointing per `thread_id`.
 2. **Persistent memory:** `RedisStore` — wire-up for future cross-session memory.
 
-Redis runs locally in Docker container (`redis://localhost:6379/0`). Data persisted via
-Fly.io volume at `/data/redis` with `redis-server --save 60 1`. No external Redis Cloud dependency.
+Redis runs locally in Docker container (`redis://localhost:6379/0`). Bundled in-container Redis is
+ephemeral — no persistence across container restarts. No external Redis Cloud dependency.
 30-minute session TTL (`{"default_ttl": 30, "refresh_on_read": True}`).
 
 ### Guardrails AI
@@ -755,7 +754,7 @@ pipeline = IngestionPipeline(
 ### Day 1: Infrastructure & Ingestion
 - Download DepEd PDFs to `documents/`.
 - `pyproject.toml` with all dependencies (uv add workflow, uv.lock).
-- `Dockerfile`, `supervisord.conf`, `fly.toml` — deployment infrastructure.
+- `Dockerfile`, `supervisord.conf` — deployment infrastructure.
 - `src/config.py` with nested Pydantic BaseSettings.
 - `src/core/` — all 6 files: `llm.py`, `embeddings.py`, `qdrant.py`, `redis.py`, `reranker.py`, `guardrails.py`.
 - `ingestion/ingest.py` + `chunker.py`: LlamaIndex IngestionPipeline → Jina v5 embed → Qdrant.
@@ -836,6 +835,5 @@ pipeline = IngestionPipeline(
 - Jina Embeddings: https://jina.ai/embeddings/
 - Jina Reranker: https://jina.ai/reranker/
 - Chainlit: https://docs.chainlit.io
-- Fly.io: https://fly.io/docs
 - Jina Embeddings v5: https://jina.ai/embeddings/
 - Jina Reranker v3: https://jina.ai/reranker/

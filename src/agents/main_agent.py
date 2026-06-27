@@ -30,5 +30,4 @@ def build_agent(checkpointer, store=None):
         backend=StateBackend(),
         checkpointer=checkpointer,
         store=store,
-        interrupt_on={"contradiction_check": True},
     )

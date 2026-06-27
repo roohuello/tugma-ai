@@ -2,10 +2,9 @@ import json
 import logging
 
 import chainlit as cl
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import AIMessageChunk, HumanMessage
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.store.memory import InMemoryStore
-from langgraph.types import Command
 
 from src.agents.main_agent import build_agent
 from src.core.guardrails import check_input
@@ -72,27 +71,23 @@ async def on_message(msg: cl.Message):
         "configurable": {"thread_id": cl.context.session.id},
     }
 
-    interrupted = cl.user_session.get("interrupted")
-    if interrupted:
-        cl.user_session.set("interrupted", False)
-        input_msg = Command(
-            resume={"decisions": [{"type": "approve"}]},
-            update={"messages": [HumanMessage(content=msg.content)]},
-        )
-    else:
-        input_msg = {"messages": [HumanMessage(content=msg.content)]}
+    input_msg = {"messages": [HumanMessage(content=msg.content)]}
 
     async with cl.Step(name="Getting to know you...", type="run") as step:
         step.input = msg.content
         final_msg = cl.Message(content="")
 
-        async for mode, chunk in agent.astream(
+        async for mode, *data in agent.astream(
             input_msg,
-            stream_mode=["custom"],
-            version="v2",
+            stream_mode=["messages", "custom"],
             config=config,
         ):
-            if mode == "custom":
+            if mode == "messages":
+                msg_chunk, _ = data[0]
+                if isinstance(msg_chunk, AIMessageChunk) and msg_chunk.content:
+                    await final_msg.stream_token(msg_chunk.content)
+            elif mode == "custom":
+                chunk = data[0]
                 chunk_type = chunk.get("type")
 
                 if chunk_type == "stage":
@@ -134,12 +129,6 @@ async def on_message(msg: cl.Message):
                                     )
                             except Exception:
                                 pass
-                elif chunk_type == "token":
-                    await final_msg.stream_token(chunk["content"])
 
         step.output = "Done"
         await final_msg.send()
-
-    state = agent.get_state(config)
-    if state.next:
-        cl.user_session.set("interrupted", True)

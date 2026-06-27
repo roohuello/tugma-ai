@@ -45,8 +45,7 @@ a conversational AI experience.
 ### Prerequisites
 
 - Python 3.11+
-- Qdrant Cloud account (free tier sufficient)
-- Redis (local Docker, docker-compose provided)
+- Docker + docker compose (for Redis + Qdrant)
 - Jina AI API key (free tier: 10M tokens)
 - OpenAI-compatible LLM endpoint
 - LangFuse account (optional, for observability)
@@ -67,8 +66,10 @@ cp .env.example .env
 # Ingest DepEd documents (run once)
 uv run python -m ingestion.ingest
 
-# Start backend + frontend
-docker compose up -d redis
+# Start backend services
+docker compose up -d
+
+# Start frontend
 uv run chainlit run frontend/app.py
 ```
 

@@ -48,6 +48,12 @@ async def create_collection(client: AsyncQdrantClient, force: bool = False) -> N
             sparse_vectors_config={"sparse": SparseVectorParams()},
         )
 
+    await client.create_payload_index(
+        collection_name=COLLECTION_NAME,
+        field_name="subject_area",
+        field_schema=models.KeywordIndexParams(type="keyword"),
+    )
+
 
 async def ingest(force: bool = False) -> int:
     docs_dir = DOCUMENTS_DIR
@@ -62,7 +68,7 @@ async def ingest(force: bool = False) -> int:
 
     print(f"Found {len(pdfs)} PDFs")
 
-    client = AsyncQdrantClient(url=settings.qdrant_url, api_key=settings.qdrant_api_key, timeout=120)
+    client = AsyncQdrantClient(url=settings.qdrant_url, timeout=120)
     embed_model = get_embeddings()
     sparse_model = SparseTextEmbedding(model_name="Qdrant/bm25")
     splitter = SentenceSplitter(chunk_size=CHUNK_SIZE, chunk_overlap=CHUNK_OVERLAP)
