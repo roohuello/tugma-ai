@@ -1,7 +1,41 @@
 # ADR 001: Project Foundation — Tugma-AI
 
 **Date:** 2026-06-19
-**Status:** Accepted (Revised after grill-with-docs + grilling session — 52 decisions. Amended 2026-06-24: simplified to 2 subagents, single model, removed translator. Amended 2026-06-27: removed Fly.io; Docker-only generic deploy.)
+**Status:** Accepted (Revised after grill-with-docs + grilling session — 52 decisions. Amended 2026-06-24: simplified to 2 subagents, single model, removed translator. Amended 2026-06-27: removed Fly.io; Docker-only generic deploy. Amended 2026-06-28: Day 4 polish — see amendments below.)
+
+---
+
+## Day 4 Amendments (2026-06-28)
+
+### Jina Token Optimization
+- **Reranker docs truncated to 200 chars** + limited to `top_n * 2` before Jina API call. Full text preserved in Qdrant payload for matcher.
+- **Retriever prompt** changed from 3-4 separate searches (main + NC II + both tracks) to a single merged query. Hybrid search handles mixed queries well.
+- **Result:** ~16K tokens/conversation → ~500 tokens. ~30× reduction, free tier safe.
+
+### UI Fixes (Chainlit)
+- **Message splitting**: Each pipeline phase gets its own chat bubble. Profiling conversation → searching → matching → marks own output. `final_msg.send()` + new `cl.Message()` at each stage boundary.
+- **Step name updates**: `step.name = chunk["name"]` now followed by `await step.update()` — step reflects current pipeline phase instead of sticking at "Getting to know you..."
+- **Removed "Done" label**: Recommendations in chat = success signal. `step.output = "Done"` removed.
+
+### Frontend Simplification
+- **CustomElement cards removed**: `ElectiveCard.jsx` deleted. `emit_recommendations` tool removed. `cl.CustomElement` rendering removed from `app.py`.
+- **Recommendations now markdown**: Matcher outputs formatted markdown text (tables, lists) directly. No subagent-scope custom event issues.
+- **LangFuse scoring removed**: `profile_completeness` and `judge_relevance` no longer triggered. Will replace with RAGAS later.
+- **`app.py` moved to root**: `frontend/` directory deleted. Run command: `uv run chainlit run app.py`.
+
+### Intake Profiling Relaxed
+- **Removed cramming**: Old prompt said "gather as many dimensions as possible (max 2 exchanges)" — forced 3+ questions per message.
+- **New prompt**: "1-2 questions per message. Stop when you have enough. Unfilled fields are OK." Max 8 turns, but stop earlier signal.
+- **Dead config removed**: `max_intake_exchanges` deleted from `config.py`. Added `extra="ignore"` to tolerate stale env vars.
+
+### Matcher Prompt Optimized
+- **Trimmed**: ~170 lines → ~55 lines (~1700 → ~500 tokens). Removed inline JSON schema (80 lines) and verbose career mapping table.
+- **One-shot discipline**: "No `ls`, `write_todos`, `read_todos`. No exploration. 3 steps: read → write → respond."
+- **Do NOT chunk files**: One call per file, full content.
+- **Expected:** 12 LLM calls → 4-5 calls. 3-minute matcher phase → ~20-30 seconds.
+
+### Matching Subagent Tools
+- **`emit_recommendations` removed** from matcher tools. Matcher now has `tools=[]` — writes `/recommendations.json` via FilesystemMiddleware, outputs markdown as its LLM response. No custom event needed.
 
 ---
 
@@ -24,28 +58,27 @@ demonstrating AI engineering depth.
 ### Pattern: Hexagonal (Ports & Adapters)
 
 ```
-frontend/ (Chainlit, runs graph) ──→ agents/ (DeepAgents domain)
-                                         ↓
-                                    core/ (Ports: LLM, Qdrant, Redis, Jina, Guardrails)
-                                         ↓
-                                    models/ (Shared Kernel: Pydantic)
+app.py (Chainlit, runs graph) ──→ agents/ (DeepAgents domain)
+                                     ↓
+                                core/ (Ports: LLM, Qdrant, Redis, Jina, Guardrails)
+                                     ↓
+                                models/ (Shared Kernel: Pydantic)
 ```
 
 - **Domain logic** (`agents/`) depends on abstract ports (`core/`), never on frameworks.
-- **Adapters** (`frontend/`) drive the domain. Swappable without touching agents.
+- **Adapters** (`app.py`) drive the domain. Swappable without touching agents.
 - **Ingestion** (`ingestion/`) is an offline tool outside the runtime.
 - **Shared Kernel** (`models/`) ensures all layers speak the same data contracts.
-- FastAPI reduced to `GET /health` only (`src/main.py`). Graph executes in Chainlit.
 - **Hexagonal depth:** Concrete with protocol. `core/` wraps external libraries directly —
   agents call `core/qdrant.hybrid_search()`, never `qdrant_client` directly.
   Swap = edit one `core/` file.
+- No FastAPI sidecar — Chainlit runs the graph directly.
 
 ### Deployment: Docker (generic container)
 
 - **Container:** Single `Dockerfile` based on `python:3.13-slim-bookworm`.
-  Three processes managed by `supervisord`: redis-server (port 6379), uvicorn (port 8001), chainlit (port 8000).
+  Chainlit managed by `supervisord` on port 8000.
 - **Secrets:** Inject via container env (`--env-file .env` or host orchestrator secrets).
-- **Health:** Chainlit on port 8000 (HTTP); FastAPI health on port 8001 (`GET /health`).
 - **Redis persistence:** Bundled in-container Redis is ephemeral (`--save "" --appendonly no` per `supervisord.conf`).
   Session data does not survive container restart. Acceptable for portfolio demo scope.
 
@@ -56,7 +89,6 @@ frontend/ (Chainlit, runs graph) ──→ agents/ (DeepAgents domain)
 DeepAgents provides:
 - Built-in subagent delegation (`task()` tool)
 - Auto-assembled middleware stack (TodoList, Filesystem)
-- `HumanInTheLoopMiddleware` via `interrupt_on` top-level parameter
 - Backend abstraction (`StateBackend` — ephemeral, per-thread)
 - Pluggable checkpointing and store (`AsyncRedisSaver`, `RedisStore`)
 - Returns `CompiledStateGraph` — LangGraph v2 streaming works underneath
@@ -65,15 +97,14 @@ DeepAgents provides:
 
 ```
 Main Agent (Intake/Orchestrator)
-│  tools=[contradiction_check, emit_stage]   ← HITL trigger + stage signals
+│  tools=[emit_stage]              Pipeline stage signals
 │
 ├── Subagent: Retrieval          Qdrant hybrid search + Jina rerank
 └── Subagent: Matching           career → elective reasoning + structured output
 
-Middleware (auto-assembled + top-level):
+Middleware (auto-assembled):
   TodoListMiddleware              Auto-included. Planning + step tracking.
   FilesystemMiddleware            Auto-included. Virtual files for inter-agent state.
-  HumanInTheLoopMiddleware        interrupt_on={"contradiction_check": True}
 
 Backend:
   StateBackend()                  Ephemeral session data (per-thread)
@@ -90,7 +121,7 @@ Redis runs locally in Docker container (redis://localhost:6379/0). No external R
 delegates to subagents via the built-in `task()` tool — no manual graph edge wiring.
 
 **Subagent format:** TypedDicts with `name`, `description`, `system_prompt` (all required) plus
-optional `tools`, `model`, `middleware`, `interrupt_on`, `skills`, `permissions`.
+optional `tools`, `model`, `middleware`, `skills`, `permissions`.
 `response_format` is a top-level `create_deep_agent()` parameter only — NOT available per-subagent.
 Structured output for the matching subagent achieved via JSON schema in the system prompt + Pydantic validation on read.
 
@@ -103,9 +134,8 @@ All agents read/write these via built-in `read_file`/`write_file` tools auto-inj
 FilesystemMiddleware. System prompts explicitly reference which files to read/write and when.
 
 **Streaming:** `create_deep_agent()` returns `CompiledStateGraph`. Chainlit streams via
-`agent.astream(input, stream_mode=["custom"], version="v2", config=...)`.
-`cl.LangchainCallbackHandler()` handles token streaming automatically — no `"messages"` stream mode needed.
-Only `"custom"` mode for `cl.Step` stage updates and recommendations delivery.
+`agent.astream(input, stream_mode=["messages", "custom"], config=...)`.
+Dual mode: `"messages"` for LLM token streaming, `"custom"` for stage events.
 
 **Model passing:** `ChatModel` objects (from `core/llm.py`) passed to `create_deep_agent(model=...)`
 and subagent dicts — not provider strings. Supports any OpenAI-compatible endpoint configured via `.env`.
@@ -119,100 +149,46 @@ Fallback: `MemorySaver` + `InMemoryStore` if Redis unreachable.
 
 ### Chainlit Runs the Graph
 
-Chainlit owns graph execution. FastAPI is a thin sidecar (`GET /health` only).
-In Docker, Chainlit must bind to all interfaces: `chainlit run frontend/app.py --host 0.0.0.0 --port 8000`.
+Chainlit owns graph execution. In Docker, bind to all interfaces: `chainlit run app.py --host 0.0.0.0 --port 8000`.
 
 ```python
-# frontend/app.py — lazy singleton init pattern
-
-_saver: AsyncRedisSaver | None = None
-_store: AsyncRedisStore | None = None
+# app.py — current pattern (simplified, Day 4)
 
 @cl.on_chat_start
 async def on_chat_start():
-    global _saver, _store
-    if _saver is None:
-        _saver = get_checkpointer()
-        await _saver.asetup()
-        _store = get_store()
-        await _store.setup()
-
-    agent = create_deep_agent(
-        model=chat_model,           # ChatModel object from core/llm.py
-        system_prompt=INTAKE_SYSTEM_PROMPT,
-        subagents=[retrieval_subagent, matching_subagent],
-        tools=[contradiction_check, emit_stage],
-        backend=StateBackend(),
-        checkpointer=_saver,
-        store=_store,
-        interrupt_on={"contradiction_check": True},
-    )
+    await _setup_state()
+    agent = build_agent(checkpointer=_saver, store=_store)
     cl.user_session.set("agent", agent)
+    ...
 
 @cl.on_message
 async def on_message(msg: cl.Message):
-    # Guardrails: input validation
-    try:
-        guard.validate(msg.content)
-    except ValidationError:
-        await cl.Message(content="Paumanhin, may nakita akong sensitibong impormasyon...").send()
-        return
+    passed, reason = check_input(msg.content)
+    if not passed:
+        ...  # guardrail rejection
 
     agent = cl.user_session.get("agent")
-    langfuse_handler = CallbackHandler()
+    langfuse_handler = get_langfuse_handler()
     cb = cl.LangchainCallbackHandler()
-    config = {"callbacks": [cb, langfuse_handler],
-              "configurable": {"thread_id": cl.context.session.id}}
-
-    # Check if resuming from HITL interrupt
-    interrupted = cl.user_session.get("interrupted")
-    if interrupted:
-        cl.user_session.set("interrupted", False)
-        input_msg = Command(resume={"decisions": [{"type": "approve"}]})
-    else:
-        input_msg = {"messages": [HumanMessage(content=msg.content)]}
+    config = {"callbacks": [cb, ...], "configurable": {"thread_id": cl.context.session.id}}
 
     async with cl.Step(name="Getting to know you...", type="run") as step:
-        step.input = msg.content
         final_msg = cl.Message(content="")
-
-        async for mode, chunk in agent.astream(
-            input_msg,
-            stream_mode=["custom"],
-            version="v2",
-            config=config,
+        async for mode, *data in agent.astream(
+            input_msg, stream_mode=["messages", "custom"], config=config
         ):
-            if mode == "custom":
+            if mode == "messages":
+                await final_msg.stream_token(msg_chunk.content)
+            elif mode == "custom":
                 if chunk.get("type") == "stage":
+                    if final_msg.content:
+                        await final_msg.send()
+                        final_msg = cl.Message(content="")
                     step.name = chunk["name"]
-                elif chunk.get("type") == "recommendations":
-                    # Render ElectiveCard custom elements
-                    for subject in chunk["data"].recommendations:
-                        card = cl.CustomElement(
-                            name="ElectiveCard",
-                            props=subject.model_dump(),
-                            display="inline",
-                        )
-                        await cl.Message(content="", elements=[card]).send()
-                    # LangFuse scoring
-                    span = langfuse_handler.current_span
-                    if span:
-                        span.score(
-                            name="profile_completeness",
-                            value=profile_completeness(chunk["data"].profile),
-                            data_type="NUMERIC",
-                        )
-                elif chunk.get("type") == "token":
-                    await final_msg.stream_token(chunk["content"])
+                    await step.update()
 
-        step.output = "Done"
+    if final_msg.content:
         await final_msg.send()
-
-    # After stream loop: check for HITL interrupt
-    state = agent.get_state(config)
-    if state.next:
-        cl.user_session.set("interrupted", True)
-        # Agent already sent contradiction message. Wait for user reply.
 ```
 
 ### Streaming: Dual Callbacks + cl.Step
@@ -231,67 +207,22 @@ writer({"type": "stage", "name": "Searching curriculum..."})
 ```
 
 Chainlit handler catches these events and updates the parent step's display name.
-The 4 pipeline stages:
+The 3 pipeline stages:
 1. "Getting to know you..." (intake)
 2. "Searching curriculum..." (retrieval)
 3. "Matching electives..." (matching)
-4. "Your recommendations" (final)
 
-Recommendations are delivered via the `emit_recommendations` tool (in `src/agents/tools.py`).
-The matcher subagent calls it after writing `/recommendations.json`. It emits two custom events:
-- Stage: `{"type": "stage", "name": "Your recommendations"}`
-- Data: `{"type": "recommendations", "data": <ElectiveRecommendation>, "retrieved_chunks": "..."}`
+Recommendations are delivered as the matcher's natural language LLM response
+(markdown format — tables, lists). No custom events needed; no CustomElement cards.
+The matcher writes `/recommendations.json` via FilesystemMiddleware and outputs
+its markdown summary directly as the chat response.
 
-Stage events are emitted by `emit_stage` — main agent calls it before each subagent delegation.
-Both tools use `get_stream_writer()` from `langgraph.config`.
+### HITL: Contradiction Detection (Conversational)
 
-### HITL: Contradiction Interrupt (Conversational)
-
-Main agent gets two tools: `contradiction_check` (HITL trigger) and `emit_stage` (pipeline stage
-signals). When the intake agent detects a contradiction
-(e.g., "nurse" + "hates science"), it calls this tool. `interrupt_on={"contradiction_check": True}`
-pauses the graph via `HumanInTheLoopMiddleware`.
-
-The agent surfaces the conflict as a natural-language message **before** calling the tool:
-> "Nursing typically requires strong science skills. Are you open to building those,
-> or would you like me to suggest related careers that lean more on your strengths?"
-
-The student replies conversationally. The LLM interprets accept/pivot/insist. No buttons.
-
-**Detection:** After the `astream` loop ends, check `agent.get_state(config).next` —
-non-empty means the graph is interrupted, waiting for resume. Set `cl.user_session.set("interrupted", True)`.
-Note: `GraphInterrupt` is suppressed by the root graph — never raised to the caller.
-
-**Resumption:** On the next `@cl.on_message`, if `interrupted`, pass `Command(resume=..., update=...)`:
-```python
-Command(
-    resume={"decisions": [{"type": "approve"}]},
-    update={"messages": [HumanMessage(content=msg.content)]},
-)
-```
-The `update` injects the user's natural-language reply into agent state alongside tool approval
-(`resume`). Agent sees its contradiction question → user's response → tool confirmation, then
-interprets accept/pivot/insist from the actual words. Same `thread_id` preserves all state via
-`AsyncRedisSaver`.
-
-**`contradiction_check` tool (in `src/agents/tools.py`):**
-```python
-from langchain_core.tools import tool
-
-@tool
-def contradiction_check(reason: str, suggestion: str) -> str:
-    """Flag a contradiction in the student's profile for human review.
-
-    Call this when the student's stated career conflicts with their
-    academic strengths, weaknesses, or work values.
-
-    Args:
-        reason: What the contradiction is (e.g., "Nursing requires strong
-                science skills but student dislikes science")
-        suggestion: What the student might consider instead
-    """
-    return "Contradiction flagged."
-```
+Main agent has one tool: `emit_stage` (pipeline stage signals). When the intake agent detects a
+contradiction (e.g., "nurse" + "hates science"), it gently points out the conflict in conversation
+and asks for clarification — no tool call, no interrupt, no buttons. The LLM interprets
+accept/pivot/insist from the student's natural-language reply.
 
 ---
 
@@ -301,15 +232,15 @@ def contradiction_check(reason: str, suggestion: str) -> str:
 tugma-ai/
 ├── pyproject.toml
 ├── Dockerfile                       # Single-stage, supervisord entrypoint
-├── supervisord.conf                 # redis + uvicorn + chainlit
+├── supervisord.conf                 # chainlit startup
 ├── .env.example
 ├── README.md
+├── app.py                           # Chainlit entrypoint (runs graph)
 ├── docs/adr/
 │   └── 001-project-foundation.md
 │
 ├── src/
-│   ├── main.py                     # FastAPI: GET /health only
-│   ├── config.py                   # Pydantic BaseSettings, nested models (.env)
+│   ├── config.py                   # Pydantic BaseSettings (.env)
 │   ├── agents/
 │   │   ├── main_agent.py           # create_deep_agent() → orchestrator
 │   │   ├── prompts/                # Separate .md prompt files
@@ -319,8 +250,7 @@ tugma-ai/
 │   │   ├── subagents/
 │   │   │   ├── retrieval.py        # Subagent dict: Qdrant + rerank
 │   │   │   └── matching.py         # Subagent dict: career → electives
-│   │   └── tools.py                # Domain tools: qdrant_hybrid_search_tool,
-│   │                               #   contradiction_check
+│   │   └── tools.py                # Domain tools: qdrant_hybrid_search_tool, emit_stage
 │   ├── core/
 │   │   ├── llm.py                  # ChatModel factory (ChatOpenAI object)
 │   │   ├── embeddings.py           # Jina v5 embeddings via HTTP
@@ -332,40 +262,31 @@ tugma-ai/
 │   │   ├── profile.py              # StudentProfile (15 fields)
 │   │   └── recommendations.py      # ElectiveRecommendation, Subject
 │   └── observability/
-│       └── langfuse.py             # CallbackHandler + scoring setup
+│       └── langfuse.py             # CallbackHandler + future scoring hooks
 │
 ├── ingestion/
-│   ├── ingest.py                   # CLI: PDFs → chunk → embed → upsert Qdrant
-│   └── chunker.py                  # LlamaIndex IngestionPipeline config
+│   └── ingest.py                   # CLI: PDFs → chunk → embed → upsert Qdrant
 │
 ├── documents/                      # DepEd PDFs (gitignored, user-provided)
 │   └── .gitkeep
-│
-├── frontend/
-│   ├── app.py                      # Chainlit: graph init, lifecycle, guardrails, streaming
-│   ├── chainlit.md                 # Welcome page (Taglish greeting)
-│   └── public/
-│       └── elements/
-│           └── ElectiveCard.jsx    # Custom JSX card component for recommendations
 │
 └── tests/
     ├── conftest.py
     ├── test_agent.py
     ├── test_guardrails.py
     ├── test_models.py
-    ├── test_scoring.py
     └── test_tools.py
 ```
 
 Changes from original:
-- `src/api/` collapsed to `src/main.py` (single health endpoint)
+- `src/api/` removed (no FastAPI sidecar needed)
 - `src/agents/middleware.py` removed (DeepAgents auto-assembles middleware)
 - `src/agents/prompts/` added — separate `.md` files for all system prompts
 - `src/core/guardrails.py` added (moved from `api/middleware/`)
 - `src/models/chat.py` removed (SSE events not needed; Chainlit owns UI)
 - `tests/test_api/` → removed (graph tested via agent directly)
 - `Dockerfile`, `supervisord.conf` added to root
-- `frontend/public/elements/ElectiveCard.jsx` added for recommendation cards
+- `app.py` at root (moved from `frontend/`, Day 4 simplification)
 
 ---
 
@@ -377,7 +298,7 @@ Changes from original:
 from deepagents import create_deep_agent
 from deepagents.backends import StateBackend
 from src.core.llm import get_chat_model  # Returns ChatOpenAI object
-from src.agents.tools import contradiction_check, emit_stage
+from src.agents.tools import emit_stage
 
 agent = create_deep_agent(
     model=get_chat_model(),         # ChatModel object — supports any OpenAI-compatible endpoint
@@ -386,20 +307,18 @@ agent = create_deep_agent(
         retrieval_subagent,
         matching_subagent,
     ],
-    tools=[contradiction_check, emit_stage],  # HITL trigger + pipeline stage signals
+    tools=[emit_stage],             # Pipeline stage signals only
     backend=StateBackend(),
     checkpointer=_saver,
     store=_store,
-    interrupt_on={"contradiction_check": True},
 )
 ```
 
 Key decisions:
 - `TodoListMiddleware` and `FilesystemMiddleware` are auto-assembled — not passed manually
-- `interrupt_on` is a top-level parameter (auto-adds `HumanInTheLoopMiddleware`)
 - `context_schema` dropped — domain data flows through FilesystemMiddleware files
-- Main agent has two tools: `contradiction_check` (HITL trigger) and `emit_stage` (pipeline UI signals).
-  All domain work delegated to 2 subagents via `task()`.
+- Main agent has one tool: `emit_stage` (pipeline UI signals). All domain work delegated to 2 subagents via `task()`.
+- Contradiction detection is conversational — LLM handles naturally, no tool call or interrupt.
 - Model is a `ChatModel` object, not a string — enables any OpenAI-compatible endpoint
 - `AsyncRedisSaver` + `RedisStore` connected to local Redis in container (`redis://localhost:6379/0`)
 
@@ -410,9 +329,8 @@ User Message (Tagalog/Taglish/English)
         │
         ▼
 ┌──────────────────────┐
-│ MAIN AGENT (Intake)  │  Conversational profiling (max 6 exchanges).
+│ MAIN AGENT (Intake)  │  Conversational profiling (max 8 exchanges).
 │                      │  Writes /profile.json (always in English).
-│                      │  Calls contradiction_check → HITL interrupt.
 │                      │  Calls emit_stage before each subagent delegation.
 │                      │  Agent decides when profiling is complete.
 └────────┬─────────────┘
@@ -427,13 +345,12 @@ User Message (Tagalog/Taglish/English)
          ▼
 ┌──────────────────────┐
 │ Matching Subagent    │  Reads /profile.json + /retrieved_chunks.md.
-│                      │  JSON schema in system prompt. 8-rule reasoning.
-│                      │  Writes /recommendations.json.
-│                      │  Calls emit_recommendations() → UI + LangFuse scoring.
-└────────┬─────────────┘
+│                      │  8-rule reasoning. Writes /recommendations.json.
+│                      │  Outputs markdown summary as LLM response.
+
          │
          ▼
-   Chainlit catches custom event → renders ElectiveCard components
+   Chainlit renders markdown recommendations in chat
 ```
 
 ### Subagent: Retrieval
@@ -455,19 +372,16 @@ matching_subagent = {
     "name": "matcher",
     "description": "Map student profile to elective recommendations with personalized reasoning.",
     "system_prompt": MATCHER_PROMPT,     # Loaded from src/agents/prompts/matcher.md
-                                         # Includes full JSON schema for ElectiveRecommendation
-    "tools": [emit_recommendations],
+                                         # Concise 55-line prompt (trimmed from 170)
+    "tools": [],                         # Writes /recommendations.json via FilesystemMiddleware
     "model": get_chat_model(),
 }
 ```
 
 Note: `response_format` is NOT available per-subagent (DeepAgents SubAgent TypedDict doesn't include it).
-Instead, the matching subagent's system prompt includes the full Pydantic JSON schema for
-`ElectiveRecommendation`. The subagent writes to `/recommendations.json` via FilesystemMiddleware.
-Chainlit reads it and validates with Pydantic. If validation fails, retry once.
-The matching subagent also calls `emit_recommendations()` which emits
-via `get_stream_writer()` for direct Chainlit rendering.
-
+Instead, the matching subagent's system prompt describes the output format concisely.
+The subagent writes to `/recommendations.json` via FilesystemMiddleware.
+Pydantic validates on read. The matcher outputs its markdown summary as its natural language response.
 Matching rules (8, in system prompt):
 1. Only recommend subjects found in the retrieved document chunks.
 2. Map career to DepEd's prototype programs of study where possible.
@@ -476,7 +390,7 @@ Matching rules (8, in system prompt):
 5. Flag contradictions (e.g., career requires science but student dislikes it).
 6. Provide personalized reasoning for each recommendation.
 7. For `needs_immediate_employment`, prioritize TechPro + NC II certified electives.
-8. Write final recommendations to `/recommendations.json` in the exact JSON schema below.
+8. Rank best→weakest. Lower confidence if weak match, few chunks, or contradictions.
 
 ---
 
@@ -491,7 +405,7 @@ All domain data flows through FilesystemMiddleware's virtual files (prompt-drive
 |---|---|---|
 | `/profile.json` | Main agent | Retriever, Matcher |
 | `/retrieved_chunks.md` | Retriever | Matcher |
-| `/recommendations.json` | Matcher | Chainlit (via custom event + Pydantic validation) |
+| `/recommendations.json` | Matcher | Chainlit (via markdown output) |
 
 ### Session Persistence
 
@@ -510,14 +424,14 @@ await _store.asetup()
 
 - Redis runs locally in Docker container (`redis://localhost:6379/0`). No external Redis Cloud dependency.
 - Session TTL: `{"default_ttl": 30, "refresh_on_read": True}` — active sessions auto-refresh.
-- `supervisord.conf` starts redis (priority 1), then uvicorn (2), then chainlit (3).
+- `supervisord.conf` starts chainlit.
 - No Redis persistence in container — session data is ephemeral (portfolio demo scope).
 
 ---
 
 ## Data Models
 
-### StudentProfile (11 dimensions)
+### StudentProfile (15 dimensions)
 
 ```python
 class StudentProfile(BaseModel):
@@ -580,22 +494,23 @@ Flat Pydantic `BaseSettings` (no nesting):
 
 ```python
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env")
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_api_key: str = ""
-    llm_model: str = "gpt-4o-mini"
-    jina_api_key: str = ""
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+    llm_base_url: str
+    llm_api_key: [REDACTED:API key param]
+    llm_model: str
+    jina_api_key: [REDACTED:API key param]
     qdrant_url: str
-    qdrant_api_key: str = ""
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str
     langfuse_public_key: str = ""
-    langfuse_secret_key: str = ""
-    langfuse_base_url: str = "https://cloud.langfuse.com"
-    guardrails_token: str = ""
+    langfuse_secret_key: [REDACTED:API key param] = ""
+    langfuse_base_url: str = ""
+    guardrails_token: [REDACTED:API key param] = ""
     environment: str = "development"
-    max_intake_exchanges: int = 6
     session_ttl_minutes: int = 30
 ```
+
+Note: Most fields are required (no defaults) — `.env` must supply them.
+`extra="ignore"` tolerates stale env vars. `max_intake_exchanges` removed (now prompt-driven).
 
 ### Qdrant
 
@@ -620,7 +535,7 @@ ephemeral — no persistence across container restarts. No external Redis Cloud 
 ### Guardrails AI
 
 **Scope:** Input-only. Validates user messages before they reach any agent.
-Called from `frontend/app.py` `@cl.on_message` via `core/guardrails.py`.
+Called from `app.py` `@cl.on_message` via `core/guardrails.py`.
 
 ```python
 from guardrails import Guard
@@ -646,13 +561,7 @@ unset, no tracing occurs.
 - No OpenTelemetry auto-instrumentation (avoids OTel overhead and potential conflicts).
 - Top-level trace per session (`thread_id`).
 
-**Scoring (in Chainlit handler):**
-- **Profiling completeness** (programmatic): ratio of filled profile dimensions to total fields (0.0–1.0).
-  Scored from `StudentProfile` Pydantic model when recommendations event arrives.
-- **Recommendation relevance** (LLM-as-judge): async `judge_relevance(recommendations_json, retrieved_chunks)`
-  calls LLM to score alignment between recommendations and retrieved DepEd curriculum chunks (0.0–1.0).
-  Clamped to [0.0, 1.0]. Returns None on any failure — score silently skipped.
-- Scores via `span.score(name="...", value=..., data_type="NUMERIC")`.
+**Scoring (deferred):** LangFuse scoring removed Day 4. Will replace with RAGAS evaluation.
 
 **Cost tracking:** Per-session LLM token usage (auto-tracked by LangFuse).
 
@@ -680,16 +589,14 @@ pipeline = IngestionPipeline(
 
 ### Chainlit Frontend
 
-- **Runs the graph directly** — not a separate client to FastAPI.
+- **Runs the graph directly** — not a separate backend service.
 - `cl.LangchainCallbackHandler()` captures LLM tokens and tool calls automatically.
-- Stream mode: `["custom"]` only. Callback handler handles token streaming. Custom events for `cl.Step` stages + recommendations.
+- Stream mode: `["messages", "custom"]`. Messages mode streams LLM tokens to chat bubbles. Custom mode catches stage events.
 - Single parent `cl.Step` wrapping graph execution. `cl.LangchainCallbackHandler()` auto-creates nested sub-steps.
 - Session ID (`cl.context.session.id`) = `thread_id` for Redis checkpointing.
-- HITL contradictions resolved conversationally (natural language, not buttons).
-- Recommendations rendered as `cl.CustomElement(name="ElectiveCard")` components via `get_stream_writer()` custom events.
-  JSX file at `frontend/public/elements/ElectiveCard.jsx` using shadcn `<Card>`.
-- Welcome page (`frontend/chainlit.md`): Taglish greeting inviting students to share career goals.
-- No `frontend/.chainlit/config.toml` — defaults sufficient.
+- Contradiction detection is conversational — LLM handles naturally, no interrupt.
+- Recommendations rendered as markdown text (tables, lists) — the matcher's LLM response.
+- Welcome page (`chainlit.md` at root): Taglish greeting inviting students to share career goals.
 
 ---
 
@@ -740,7 +647,7 @@ pipeline = IngestionPipeline(
 | Scenario | Behavior |
 |----------|----------|
 | No Qdrant results for career | Subagent generalizes within same cluster. Lower confidence. |
-| Student contradicts self (nurse + hates science) | HITL interrupt → conversational resolution → 3 paths. |
+| Student contradicts self (nurse + hates science) | Agent points out contradiction in conversation, asks clarification. |
 | Translation quality poor | Log to LangFuse. Retry once. If still poor, ask rephrase. |
 | LLM returns malformed output | Pydantic validates `/recommendations.json` on read. On failure, retry once. |
 | Guardrails trigger | Polite refusal message. Log violation to LangFuse. |
@@ -757,29 +664,23 @@ pipeline = IngestionPipeline(
 - `Dockerfile`, `supervisord.conf` — deployment infrastructure.
 - `src/config.py` with nested Pydantic BaseSettings.
 - `src/core/` — all 6 files: `llm.py`, `embeddings.py`, `qdrant.py`, `redis.py`, `reranker.py`, `guardrails.py`.
-- `ingestion/ingest.py` + `chunker.py`: LlamaIndex IngestionPipeline → Jina v5 embed → Qdrant.
-- `src/main.py` — FastAPI `GET /health`.
+- `ingestion/ingest.py`: LlamaIndex IngestionPipeline → Jina v5 embed → Qdrant.
 - **Deadline:** `hybrid_search("nursing career electives")` returns relevant DepEd chunks.
 
 ### Day 2: Agent Pipeline & Chainlit UI
 - `src/models/` — `profile.py`, `recommendations.py`.
 - `src/agents/prompts/` — 3 `.md` system prompt files (intake, retriever, matcher).
-- `src/agents/tools.py` — `qdrant_hybrid_search_tool` + `contradiction_check`.
-- `src/agents/subagents/` — 3 subagent dicts (ChatModel objects, no response_format).
-- `src/agents/main_agent.py` — `create_deep_agent()` with `StateBackend`, `tools=[contradiction_check]`, `interrupt_on`.
-- `frontend/public/elements/ElectiveCard.jsx` — JSX card component.
-- `frontend/app.py` — Chainlit entry: lazy singleton Redis init, guardrails, dual callbacks, `cl.Step`, CustomElement rendering.
-- `frontend/chainlit.md` — Welcome page with Taglish greeting.
-- **Deadline:** End-to-end: "Gusto ko maging nurse" → ElectiveCards rendered.
+- `src/agents/tools.py` — `qdrant_hybrid_search_tool` + `emit_stage`.
+- `src/agents/subagents/` — 2 subagent dicts (ChatModel objects, no response_format).
+- `src/agents/main_agent.py` — `create_deep_agent()` with `StateBackend`, `tools=[emit_stage]`.
+- `app.py` — Chainlit entry: lazy singleton Redis init, guardrails, dual callbacks, `cl.Step`.
+- **Deadline:** End-to-end: "Gusto ko maging nurse" → markdown recommendations.
 
 ### Day 3: Depth & Polish
-- HITL contradiction interrupt — conversational resolution with `contradiction_check` tool + `agent.get_state(config).next` detection + `Command(resume=...)`.
-- `cl.Step` progress — `get_stream_writer()` custom events for 5 stages.
+- `cl.Step` progress — `get_stream_writer()` custom events for 3 stages + `await step.update()`.
 - LangFuse `CallbackHandler()` in config → auto-traces all agent turns + tool calls.
-- LangFuse scoring: profiling completeness (programmatic) + recommendation relevance (LLM-as-judge).
-- Chainlit `CustomElement` rendering for `ElectiveRecommendation`.
-- Tests: `test_agents/`, `test_core/`, `test_ingestion/`, `conftest.py` (~15-20 tests).
-- **Deadline:** System is demo-ready with observability, guardrails, interrupts, and card UI.
+- Tests: `test_agent.py`, `test_models.py`, `test_tools.py`, `test_guardrails.py`, `conftest.py`.
+- **Deadline:** System is demo-ready with observability, guardrails, and markdown recommendations.
 
 ---
 
@@ -812,10 +713,9 @@ pipeline = IngestionPipeline(
 | Local Redis in container (not Redis Cloud) | Simpler deployment. No external Redis dependency. Volume-persisted data. |
 | Chainlit over Gradio/Streamlit | Best-in-class LangGraph integration, native agent UX. |
 | CallbackHandler over OpenTelemetry for LangFuse | Simpler, additive, no OTel conflict with Chainlit callback. |
-| HITL as conversational (not buttons) | Preserves chat metaphor. Simpler to build. |
 | Prompts in separate .md files (not inline) | Cleaner diffs, faster prompt iteration. Standard LLM engineering practice. |
 | JSON schema in system prompt (not response_format) | `response_format` not available per-subagent in DeepAgents. System prompt + Pydantic achieves same result. |
-| `stream_mode=["custom"]` only (not dual mode) | `cl.LangchainCallbackHandler()` handles token streaming. Single mode simplifies loop. |
+| `stream_mode=["messages", "custom"]` | Callback handler + custom events. Dual mode gives token streaming + stage updates. |
 
 ---
 

@@ -1,5 +1,3 @@
-import json
-
 from langchain_core.tools import tool
 from langgraph.config import get_stream_writer
 from fastembed import SparseTextEmbedding
@@ -72,8 +70,9 @@ async def qdrant_hybrid_search_tool(
         return "No matching curriculum documents found."
 
     documents = [p.payload.get("text", "") for p in points]
-
-    reranked = await rerank(query=query, documents=documents, top_n=min(limit, len(documents)))
+    top_n = min(limit, len(documents))
+    preview_docs = [d[:200] for d in documents[: top_n * 2]]
+    reranked = await rerank(query=query, documents=preview_docs, top_n=top_n)
 
     lines = []
     for i, result in enumerate(reranked):
@@ -93,21 +92,6 @@ async def qdrant_hybrid_search_tool(
 
 
 @tool
-def contradiction_check(reason: str, suggestion: str) -> str:
-    """Flag a contradiction in the student's profile for human review.
-
-    Call this when the student's stated career conflicts with their
-    academic strengths, weaknesses, or work values.
-
-    Args:
-        reason: What the contradiction is (e.g., "Nursing requires strong
-                science skills but student dislikes science")
-        suggestion: What the student might consider instead
-    """
-    return "Contradiction flagged."
-
-
-@tool
 def emit_stage(name: str) -> str:
     """Signal a stage transition in the pipeline UI.
 
@@ -121,24 +105,3 @@ def emit_stage(name: str) -> str:
     writer({"type": "stage", "name": name})
     return f"Stage set to: {name}"
 
-
-@tool
-def emit_recommendations(recommendations_json: str, retrieved_chunks: str) -> str:
-    """Emit final elective recommendations for rendering and LangFuse scoring.
-
-    Call AFTER writing /recommendations.json. Pass the full content of both
-    /recommendations.json and /retrieved_chunks.md.
-
-    Args:
-        recommendations_json: Full JSON content of /recommendations.json
-        retrieved_chunks: Full content of /retrieved_chunks.md
-    """
-    data = json.loads(recommendations_json)
-    writer = get_stream_writer()
-    writer({"type": "stage", "name": "Your recommendations"})
-    writer({
-        "type": "recommendations",
-        "data": data,
-        "retrieved_chunks": retrieved_chunks,
-    })
-    return "Recommendations emitted."

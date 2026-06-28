@@ -1,4 +1,3 @@
-import json
 import logging
 
 import chainlit as cl
@@ -9,18 +8,17 @@ from langgraph.store.memory import InMemoryStore
 from src.agents.main_agent import build_agent
 from src.core.guardrails import check_input
 from src.core.redis import get_checkpointer, get_store
-from src.observability.langfuse import get_langfuse_handler, profile_completeness, judge_relevance
+from src.observability.langfuse import get_langfuse_handler
 
 logger = logging.getLogger(__name__)
 
 # ponytail: lazy singleton init — one setup per process lifetime
 _saver = None
 _store = None
-_redis_unavailable = False
 
 
 async def _setup_state():
-    global _saver, _store, _redis_unavailable
+    global _saver, _store
     if _saver is not None:
         return
     try:
@@ -32,7 +30,6 @@ async def _setup_state():
         logger.warning("Redis unavailable (%s) — using in-memory state. Session data won't persist.", e)
         _saver = MemorySaver()
         _store = InMemoryStore()
-        _redis_unavailable = True
 
 
 @cl.on_chat_start
@@ -43,8 +40,7 @@ async def on_chat_start():
     cl.user_session.set("agent", agent)
 
     await cl.Message(
-        content="Maligayang pagdating sa Tugma! Ano'ng career ang nasa isip mo? "
-        "Pwedeng Tagalog, Taglish, o English."
+        content="Welcome sa Tugma! Ano'ng career ang nasa isip mo? "
     ).send()
 
 
@@ -53,7 +49,7 @@ async def on_message(msg: cl.Message):
     passed, reason = check_input(msg.content)
     if not passed:
         await cl.Message(
-            content="Paumanhin, may nakita akong sensitibong impormasyon o hindi angkop na "
+            content="Sorry, may nakita akong sensitibong impormasyon o hindi angkop na "
             "pananalita sa iyong mensahe. Subukan mong muling ipahayag ito."
         ).send()
         return
@@ -91,44 +87,11 @@ async def on_message(msg: cl.Message):
                 chunk_type = chunk.get("type")
 
                 if chunk_type == "stage":
+                    if final_msg.content:
+                        await final_msg.send()
+                        final_msg = cl.Message(content="")
                     step.name = chunk["name"]
-                elif chunk_type == "recommendations":
-                    for subject in chunk["data"]["recommendations"]:
-                        await cl.Message(
-                            content="",
-                            elements=[
-                                cl.CustomElement(
-                                    name="ElectiveCard",
-                                    props=subject,
-                                    display="inline",
-                                )
-                            ],
-                        ).send()
-                    if langfuse_handler and hasattr(langfuse_handler, "current_span"):
-                        span = langfuse_handler.current_span
-                        if span:
-                            from src.models.profile import StudentProfile
-                            try:
-                                profile = StudentProfile(**chunk["data"]["profile"])
-                                span.score(
-                                    name="profile_completeness",
-                                    value=profile_completeness(profile),
-                                    data_type="NUMERIC",
-                                )
-                            except Exception:
-                                pass
-                            try:
-                                recs_json = json.dumps(chunk["data"])
-                                chunks = chunk.get("retrieved_chunks", "")
-                                score = await judge_relevance(recs_json, chunks)
-                                if score is not None:
-                                    span.score(
-                                        name="recommendation_relevance",
-                                        value=score,
-                                        data_type="NUMERIC",
-                                    )
-                            except Exception:
-                                pass
+                    await step.update()
 
-        step.output = "Done"
-        await final_msg.send()
+        if final_msg.content:
+            await final_msg.send()

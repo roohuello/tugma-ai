@@ -12,10 +12,10 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --no-dev --frozen
 
 COPY src/ src/
-COPY frontend/ frontend/
+COPY app.py chainlit.md ./
 COPY .chainlit/ .chainlit/
 COPY supervisord.conf ./
 
-EXPOSE 8000 8001
+EXPOSE 8000
 
 CMD ["supervisord", "-c", "/app/supervisord.conf"]

@@ -26,7 +26,6 @@ a conversational AI experience.
 
 | Layer | Technology |
 |-------|-----------|
-| API | FastAPI (GET /health only) |
 | Agent Framework | DeepAgents (LangGraph + LangChain substrate) |
 | Frontend | Chainlit |
 | Vector Search | Qdrant (hybrid: dense + sparse) |
@@ -70,7 +69,7 @@ uv run python -m ingestion.ingest
 docker compose up -d
 
 # Start frontend
-uv run chainlit run frontend/app.py
+uv run chainlit run app.py
 ```
 
 ### Architecture Decision Records

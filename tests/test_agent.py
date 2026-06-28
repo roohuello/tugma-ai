@@ -11,11 +11,9 @@ def test_retrieval_subagent_structure():
     assert len(retrieval_subagent["tools"]) == 1
 
 
-def test_matching_subagent_has_emit_recommendations():
+def test_matching_subagent_structure():
     assert matching_subagent["name"] == "matcher"
-    assert len(matching_subagent["tools"]) == 1
-    tool = matching_subagent["tools"][0]
-    assert tool.name == "emit_recommendations"
+    assert len(matching_subagent["tools"]) == 0
 
 
 def test_agent_builds():

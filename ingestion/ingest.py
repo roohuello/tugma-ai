@@ -17,7 +17,8 @@ from qdrant_client import AsyncQdrantClient, models
 from qdrant_client.models import Distance, VectorParams, SparseVectorParams
 from tqdm import tqdm
 
-from ingestion.chunker import CHUNK_OVERLAP, CHUNK_SIZE
+CHUNK_SIZE = 512
+CHUNK_OVERLAP = 50
 from src.config import settings
 from src.core.embeddings import EMBEDDING_DIM, get_embeddings
 from src.core.qdrant import COLLECTION_NAME, VECTOR_NAME

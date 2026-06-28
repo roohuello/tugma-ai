@@ -1,23 +1,7 @@
 from src.config import settings
 from src.models.profile import StudentProfile
 
-PROFILE_DIMENSIONS = [
-    "primary_career",
-    "career_confidence",
-    "secondary_careers",
-    "academic_strengths",
-    "academic_weaknesses",
-    "preferred_track",
-    "intended_college_course",
-    "hobbies",
-    "extracurriculars",
-    "existing_skills",
-    "work_values",
-    "work_environment",
-    "collaboration_style",
-    "needs_immediate_employment",
-    "financial_constraints",
-]
+PROFILE_DIMENSIONS = list(StudentProfile.model_fields.keys())
 
 
 def get_langfuse_handler():
