@@ -2,82 +2,102 @@
 
 **Career-to-elective matcher for the Strengthened Senior High School curriculum.**
 
-An AI agent that interviews incoming Grade 11 students about their career aspirations
-and recommends elective subjects aligned with their profile — powered by official
-DepEd curriculum documents.
+Tugma-AI interviews incoming Grade 11 students in English, Tagalog, or Taglish,
+then recommends SSHS electives grounded in official DepEd curriculum documents.
+It is a developer-focused case study in building a small, practical agentic RAG
+system.
 
----
+## Why This Exists
 
-## Overview
+- SSHS replaces strands with flexible Academic and TechPro elective clusters.
+- Students need career-to-elective guidance without reading policy documents.
+- Recommendations should cite curriculum evidence, not generic LLM guesses.
 
-With the new Strengthened SHS curriculum (DepEd Order No. 017, s. 2026), students
-have freedom to choose elective subjects across 15 clusters spanning Academic and
-Technical-Professional tracks. Tugma-AI helps students navigate this choice through
-a conversational AI experience.
+## What It Does
 
-### How it works
+- Builds a student profile from a relaxed chat, not a long form.
+- Searches DepEd documents with hybrid retrieval and reranking.
+- Maps careers, strengths, constraints, and hobbies to ranked electives.
+- Returns markdown recommendations that Chainlit renders directly.
 
-1. Student chats in English, Tagalog, or Taglish about their career goals
-2. AI profiles them across 11 dimensions (career, skills, hobbies, values, etc.)
-3. Matches profile against official DepEd curriculum documents
-4. Recommends elective subjects with personalized reasoning
+## Architecture
 
-### Tech Stack
+```mermaid
+flowchart TD
+    A[Chainlit app.py\nchat UI + graph runner] --> B[DeepAgents main agent\nintake + orchestration]
+    B --> C[Retrieval subagent\nQdrant hybrid search + Jina rerank]
+    B --> D[Matching subagent\ncareer-to-elective reasoning]
+    C --> E[(Qdrant\nsshs_documents)]
+    C --> F[Jina embeddings + reranker]
+    D --> G[/recommendations.json\nPydantic validated]
+    B --> H[(Redis\nLangGraph checkpoints)]
+    B --> I[LangFuse\noptional tracing]
+```
 
-| Layer | Technology |
-|-------|-----------|
-| Agent Framework | DeepAgents (LangGraph + LangChain substrate) |
-| Frontend | Chainlit |
-| Vector Search | Qdrant (hybrid: dense + sparse) |
-| Session State | Redis (LangGraph AsyncRedisSaver) |
-| Embeddings | Jina AI (jina-embeddings-v5-text-small) |
-| Reranker | Jina AI (jina-reranker-v3) |
-| Document Ingestion | LlamaIndex |
-| Observability | LangFuse |
-| Input Guardrails | Guardrails AI |
-| LLM | Any OpenAI-compatible endpoint |
+- `app.py` runs the Chainlit chat UI and streams the graph.
+- `src/agents/` owns DeepAgents orchestration and subagent prompts.
+- `src/core/` wraps LLM, Qdrant, Redis, Jina, Guardrails, and LangFuse adapters.
 
----
+## Pipeline
 
-## Quick Start
+| Stage | Output |
+|---|---|
+| Intake | `/profile.json` with career, strengths, constraints, hobbies, and values |
+| Retrieval | `/retrieved_chunks.md` with relevant DepEd curriculum evidence |
+| Matching | `/recommendations.json` plus markdown recommendations in chat |
 
-### Prerequisites
+## Key Decisions
+
+| Decision | Why |
+|---|---|
+| DeepAgents over raw LangGraph | Subagent delegation and middleware are built in. |
+| FilesystemMiddleware for state | Virtual files keep inter-agent contracts simple and visible. |
+| Hybrid search over dense-only | BM25 helps with acronyms, curriculum terms, and mixed-language queries. |
+| Jina rerank after Qdrant | Keeps retrieval broad first, then improves final precision. |
+| Markdown output over custom cards | Same user value with less fragile UI plumbing. |
+| Input-only guardrails | Output is already constrained by retrieval, prompts, and Pydantic. |
+| Relaxed intake | Better chat UX than forcing every profile field up front. |
+
+## Run Locally
+
+Prerequisites:
 
 - Python 3.11+
-- Docker + docker compose (for Redis + Qdrant)
-- Jina AI API key (free tier: 10M tokens)
+- Docker + docker compose
+- Jina AI API key
 - OpenAI-compatible LLM endpoint
-- LangFuse account (optional, for observability)
-
-### Setup
+- LangFuse account, optional
 
 ```bash
 git clone <repo-url>
 cd tugma-ai
-
-# Install dependencies
 uv sync
-
-# Configure environment
 cp .env.example .env
-# Fill in .env with your API keys
+```
 
-# Ingest DepEd documents (run once)
+Fill in `.env`, then ingest the DepEd documents once:
+
+```bash
 uv run python -m ingestion.ingest
+```
 
-# Start backend services
+Start Redis/Qdrant and the chat UI:
+
+```bash
 docker compose up -d
-
-# Start frontend
 uv run chainlit run app.py
 ```
 
-### Architecture Decision Records
+Try:
 
-See `docs/adr/` for all architecture decisions.
+```text
+Gusto ko maging nurse, pero hindi ako sure kung anong electives kukunin.
+```
 
----
+## Notes
 
-## License
+- Biggest simplification: markdown recommendations replaced custom UI cards.
+- Biggest cost win: short reranker snippets cut Jina token use by about 30x.
+- Biggest UX win: intake asks 1-2 questions at a time and stops when enough.
 
-MIT
+For full architecture history, see `docs/adr/001-project-foundation.md`.
