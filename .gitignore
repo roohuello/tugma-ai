@@ -8,11 +8,3 @@ __pycache__/
 .idea/
 
 .qdrant/
-uv.lock
-
-documents/
-
-AGENTS*
-CONTEXT*
-
-BEGINNER_QUESTIONS.md
